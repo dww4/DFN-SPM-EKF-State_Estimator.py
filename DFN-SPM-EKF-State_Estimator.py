@@ -11,8 +11,7 @@ sim_dfn = pybamm.Simulation(dfn_model,parameter_values=pv) #Create simulation wi
 
 #Apply a dynamic current profile
 time = np.linspace(0, 3600, 1000)  #1-hour simulation
-current_profile = -2 * np.sin(2 * np.pi * time / 3600)  #Sinusoidal current [A] to model realistic conditions
-input_parameters = {"Current function": pybamm.Interpolant(time, current_profile, pybamm.t)}
+input_parameters = {"Current function": 5}
 
 #Run DFN simulation
 sim_dfn.solve(t_eval=time, inputs=input_parameters)
