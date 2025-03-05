@@ -3,18 +3,33 @@ import numpy as np
 from datetime import datetime
 import matplotlib.pyplot as plt
 
+#### Obtain Inputs from User ###
+
+Crate = float(input("C_rate? (ex: 1, 0.5, 0.1) \n"))
+
+temp = float(input("Temperature? [°C] \n"))
+
+show = input("Would you like to see DFN result? (Y/N) \n")
+
+if show!='Y' and show!='N':
+    print("%s not recognized. Please use Y or N"%show)
+
 #### Simulate "Real" Data Using DFN Model ####
 dfn_model = pybamm.lithium_ion.DFN(options={"thermal": "lumped"}) #Define DFN model with lumped thermal eqn
 pv = pybamm.ParameterValues("Chen2020") #Use LGM50 Cell Parameters (NMC-SiGraphite-LiPF6)
-sim_dfn = pybamm.Simulation(dfn_model,parameter_values=pv) #Create simulation with model
-
+current = Crate*pv['Nominal cell capacity [A.h]']
+pv["Ambient temperature [K]"] = temp+273
+pv["Initial temperature [K]"] = temp+273
+#print(current)
 
 #Apply a dynamic current profile
 time = np.linspace(0, 3600, 1000)  #1-hour simulation
-input_parameters = {"Current function": 5}
+current_profile = lambda t: current*np.sin(2 * np.pi * t / 3600) #Sinusoidal current [A] to model realistic conditions
+pv["Current function [A]"] = current_profile
+sim_dfn = pybamm.Simulation(dfn_model,parameter_values=pv) #Create simulation with model
 
 #Run DFN simulation
-sim_dfn.solve(t_eval=time, inputs=input_parameters)
+sim_dfn.solve(t_eval=time)
 
 #Extract "measured" terminal voltage, SOC, and temperature
 voltage_dfn = sim_dfn.solution["Terminal voltage [V]"].data
@@ -34,30 +49,38 @@ temp_dfn = sim_dfn.solution["X-averaged cell temperature [K]"].data
 
 #Add measurement noise
 voltage_measured = voltage_dfn + np.random.normal(0, 0.01, size=voltage_dfn.shape)  #10 mV noise
-temp_measured = temp_dfn + np.random.normal(0, 0.5, size=temp_dfn.shape)  #0.5 K noise
+temp_measured = temp_dfn + np.random.normal(0, 0.5, size=temp_dfn.shape)  - 273 #0.5 K noise
 time_sim = sim_dfn.solution["Time [min]"].data
 
-#Plot DFN results
-plt.figure(figsize=(10, 7))
-plt.subplot(3, 1, 1)
-plt.plot(time_sim, voltage_measured, label="Measured Voltage (DFN + Noise)")
-plt.xlabel("Time [min]")
-plt.ylabel("Voltage [V]")
-plt.legend()
+if(show=='Y'):
+    #Plot DFN results
+    plt.figure(figsize=(10, 7))
+    plt.subplot(3, 1, 1)
+    plt.plot(time_sim, voltage_measured, label="Measured Voltage (DFN + Noise)")
+    plt.xlabel("Time [min]")
+    plt.ylabel("Voltage [V]")
+    plt.legend()
 
-plt.subplot(3, 1, 3)
-plt.plot(time_sim, temp_measured, label="Measured Temperature (DFN + Noise)", color='r')
-plt.xlabel("Time [min]")
-plt.ylabel("Temperature [K]")
-plt.legend()
+    plt.subplot(3, 1, 3)
+    plt.plot(time_sim, temp_measured, label="Measured Temperature (DFN + Noise)", color='r')
+    plt.xlabel("Time [min]")
+    plt.ylabel("Temperature [°C]")
+    plt.legend()
 
-plt.subplot(3, 1, 2)
-plt.plot(time_sim, soc_dfn, label="True SOC (DFN)", color='g')
-plt.xlabel("Time [min]")
-plt.ylabel("State of Charge")
-plt.legend()
-plt.tight_layout()
-plt.show()
+    plt.subplot(3, 1, 2)
+    plt.plot(time_sim, soc_dfn, label="True SOC (DFN)", color='g')
+    plt.xlabel("Time [min]")
+    plt.ylabel("State of Charge")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+#     plt.subplot(3, 1, 3)
+#     plt.plot(time_sim, sim_dfn.solution["Current [A]"].data, label="Current Profile")
+#     plt.xlabel("Time [min]")
+#     plt.ylabel("Current [A]")
+#     plt.legend()
+
 
 #### Set up the SPM for EKF #####
 spm_model = pybamm.lithium_ion.SPM()
@@ -78,10 +101,11 @@ execution_time = np.zeros(len(time)) #Average execution time per step
 for k in range(1, len(time_sim)):
     start_time = datetime.now()
     dt = time[k] - time[k - 1]
-    current = current_profile[k]
+    current = current_profile(time)
+#     current = current_profile[k]
 
     #Prediction step using SPM model
-    sim_spm.solve(t_eval=[0, time[k]], inputs={"Current function": current})
+    sim_spm.solve(t_eval=[0, time[k]])
     c_s_n_spm = sim_spm.solution["X-averaged negative particle surface concentration [mol.m-3]"].data[-1]
     voltage_pred = sim_spm.solution["Terminal voltage [V]"].data[-1]
     soc_pred = c_s_n_spm /33133.0 #33133.0 is maximum conc on surface from Chen2020 paramter set
@@ -109,9 +133,10 @@ for k in range(1, len(time_sim)):
 #Plot SOC estimation results
 plt.figure(figsize=(10, 5))
 plt.plot(time_sim, soc_dfn, label="True SOC (DFN)", color='g')
-plt.plot(time/60, state_est, label="Estimated SOC (SPM+EKF)", linestyle='--')
+plt.plot(time_sim, state_est[0:len(time_sim)], label="Estimated SOC (SPM+EKF)", linestyle='--')
 plt.xlabel("Time [min]")
 plt.ylabel("State of Charge")
+plt.title("SOC Estimate at %gC and %g°C"%(Crate,temp))
 plt.legend()
 plt.show()
 print("Average Execution Time: %g | #Estimates/sec: %g" %(np.mean(execution_time),1/np.mean(execution_time)))
