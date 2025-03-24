@@ -15,12 +15,25 @@ if show!='Y' and show!='N':
     print("%s not recognized. Please use Y or N"%show)
 
 #### Simulate "Real" Data Using DFN Model ####
-dfn_model = pybamm.lithium_ion.DFN(options={"thermal": "lumped"}) #Define DFN model with lumped thermal eqn
+dfn_model = pybamm.lithium_ion.DFN(options={"thermal": "x-full"}) #Define DFN model with lumped thermal eqn
 pv = pybamm.ParameterValues("Chen2020") #Use LGM50 Cell Parameters (NMC-SiGraphite-LiPF6)
 current = Crate*pv['Nominal cell capacity [A.h]']
+
+#Define Ambient/Initial temperatures
 pv["Ambient temperature [K]"] = temp+273
 pv["Initial temperature [K]"] = temp+273
-#print(current)
+
+#Add undefined thermal parameters to set
+custom_params = {
+    "Negative current collector surface heat transfer coefficient [W.m-2.K-1]": 10.0,
+    "Negative tab heat transfer coefficient [W.m-2.K-1]": 10.0,
+    "Negative tab width [m]": 0.01,
+    "Edge heat transfer coefficient [W.m-2.K-1]": 10.0,
+    "Positive current collector surface heat transfer coefficient [W.m-2.K-1]": 10.0,
+    "Positive tab heat transfer coefficient [W.m-2.K-1]": 10.0,
+    "Positive tab width [m]": 0.01,
+}
+pv.update(custom_params,check_already_exists=False)
 
 #Apply a dynamic current profile
 time = np.linspace(0, 3600, 1000)  #1-hour simulation
@@ -49,7 +62,7 @@ temp_dfn = sim_dfn.solution["X-averaged cell temperature [K]"].data
 
 #Add measurement noise
 voltage_measured = voltage_dfn + np.random.normal(0, 0.01, size=voltage_dfn.shape)  #10 mV noise
-temp_measured = temp_dfn + np.random.normal(0, 0.5, size=temp_dfn.shape)  - 273 #0.5 K noise
+temp_measured = temp_dfn + np.random.normal(0, 0.5, size=temp_dfn.shape)  - 273#0.5 K noise
 time_sim = sim_dfn.solution["Time [min]"].data
 
 if(show=='Y'):
@@ -75,11 +88,12 @@ if(show=='Y'):
     plt.tight_layout()
     plt.show()
 
-#     plt.subplot(3, 1, 3)
+    #plt.subplot(3, 1, 3)
 #     plt.plot(time_sim, sim_dfn.solution["Current [A]"].data, label="Current Profile")
 #     plt.xlabel("Time [min]")
 #     plt.ylabel("Current [A]")
 #     plt.legend()
+
 
 
 #### Set up the SPM for EKF #####
@@ -97,6 +111,7 @@ state_est = np.zeros(len(time))  #SOC
 state_est[0] = 0.9  #Initial SOC guess
 P = np.array([[0.01]])  #Initial error covariance
 execution_time = np.zeros(len(time)) #Average execution time per step
+RMSE = 0 #Root-mean-squared error
 
 for k in range(1, len(time_sim)):
     start_time = datetime.now()
@@ -130,6 +145,9 @@ for k in range(1, len(time_sim)):
     execution_t = end_time - start_time
     execution_time[k] = execution_t.total_seconds()
 
+    #Calculate Error b/t Estimator and DFN
+    RMSE += (soc_dfn[k] - state_est[k])**2
+
 #Plot SOC estimation results
 plt.figure(figsize=(10, 5))
 plt.plot(time_sim, soc_dfn, label="True SOC (DFN)", color='g')
@@ -139,4 +157,4 @@ plt.ylabel("State of Charge")
 plt.title("SOC Estimate at %gC and %g°C"%(Crate,temp))
 plt.legend()
 plt.show()
-print("Average Execution Time: %g | #Estimates/sec: %g" %(np.mean(execution_time),1/np.mean(execution_time)))
+print("Average Execution Time: %g | #Estimates/sec: %g | RMSE_t: %g" %(np.mean(execution_time),1/np.mean(execution_time),np.sqrt(RMSE)/time_sim[-1]))
